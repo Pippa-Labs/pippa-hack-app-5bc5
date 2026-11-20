@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Privacy lock: this page may not load or send anything over the network. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gene Day, offline DNA reader</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 20px; font-size: 19px; line-height: 1.5; color: #1d1d1f; background: #fbfbf8; }
+  h1 { font-size: 32px; margin-bottom: 4px; }
+  .lock { background: #e8f5e9; border: 2px solid #2e7d32; border-radius: 12px; padding: 12px 16px; margin: 16px 0; }
+  .drop { border: 3px dashed #999; border-radius: 16px; padding: 36px; text-align: center; background: #fff; cursor: pointer; }
+  .drop.over { border-color: #2e7d32; background: #f1f8f1; }
+  button { font-size: 18px; padding: 10px 18px; border-radius: 10px; border: 1px solid #888; background: #fff; cursor: pointer; margin: 6px 6px 0 0; }
+  button.primary { background: #2e7d32; color: #fff; border-color: #2e7d32; }
+  .card { border-radius: 14px; padding: 14px 18px; margin: 12px 0; background: #fff; border: 1px solid #ddd; }
+  .green { border-left: 10px solid #2e7d32; }
+  .red { border-left: 10px solid #c62828; }
+  .say { background: #f4f4f0; border-radius: 8px; padding: 8px 12px; margin-top: 8px; font-style: italic; }
+  .muted { color: #666; font-size: 16px; }
+  #red-box { display: none; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1>🧬 Gene Day</h1>
+<div class="muted">Your offline DNA reader</div>
+
+<div class="lock">🔒 <b>This page cannot use the internet.</b> It is locked so that it can't send anything anywhere. Your DNA file is read here on your computer and never leaves it.</div>
+
+<div id="start">
+  <div class="drop" id="drop">
+    <div style="font-size:44px">📄</div>
+    <b>Drag your DNA file here</b><br>
+    <span class="muted">or click to choose it (the raw data file from MyHeritage or 23andMe)</span>
+    <input type="file" id="file" class="hidden" accept=".csv,.txt">
+  </div>
+  <button id="example">Try with example data</button>
+</div>
+
+<div id="results" class="hidden">
+  <h2>🟢 Your everyday traits</h2>
+  <p class="muted">Safe to share with your assistant. Copy a sentence and tell it to Pippa, and Gene Day can use it for daily answers.</p>
+  <div id="green"></div>
+
+  <h2>🔴 Health traits</h2>
+  <div class="card red">
+    <b>Locked.</b> These results could matter to an insurance company, so they are off unless you turn them on. If you do, they are shown <b>only on this screen</b> and are never shared with Pippa or anyone else.
+    <br><label><input type="checkbox" id="optin"> I understand. Show my health traits on this screen only.</label>
+  </div>
+  <div id="red-box"></div>
+
+  <h2>📋 What left your computer</h2>
+  <div class="card" id="audit">Nothing. This page has no internet access.</div>
+
+  <p class="muted">⚠️ Your DNA also says things about your parents, children and siblings. Think of them before you share any result.</p>
+  <button id="forget" class="primary">Forget everything</button>
+</div>
+
+<script>
+const SAMPLE = `# SYNTHETIC EXAMPLE DATA. Not a real person. Made for the Gene Day demo.
+# Format follows a MyHeritage style raw data export (CSV).
+RSID,CHROMOSOME,POSITION,RESULT
+"rs67627625","22","142832566","AC"
+"rs79220482","2","136313743","CC"
+"rs94817444","8","22072787","CT"
+"rs30287351","10","34819500","CC"
+"rs98904489","15","77392704","AG"
+"rs6262308","22","20936088","TT"
+"rs85641177","21","156597039","AA"
+"rs21306925","8","176869224","CC"
+"rs50982352","4","147134034","AG"
+"rs30673100","2","149528595","GG"
+"rs14831903","19","153431510","CC"
+"rs10375836","8","24450589","AC"
+"rs49530762","10","66786503","GG"
+"rs76748230","2","166264123","CC"
+"rs74744576","9","237231541","GG"
+"rs7903146","10","114758349","CT"
+"rs4988235","2","136608646","GG"
+"rs46650450","12","159649948","GT"
+"rs36265254","10","1198869","GG"
+"rs8933677","19","33332834","CC"
+"rs37230636","16","187210804","AG"
+"rs44464097","5","106084624","AA"
+"rs39870700","14","38823178","AG"
+"rs9142912","10","173812328","GT"
+"rs1815739","11","66328095","CT"
+"rs10722233","18","25367841","TT"
+"rs762551","15","75041917","AC"
+"rs78457446","19","106583105","AA"
+"rs31970943","5","22376034","GG"
+"rs77626738","10","150492917","GG"
+"rs49153450","22","237448704","AC"
+"rs11815439","6","120677824","AC"
+"rs4028344","15","95519170","GG"
+"rs2619076","16","223194978","GG"
+"rs16846520","17","112338990","GG"
+"rs78832216","15","18558413","AG"
+"rs72921001","11","6889648","AC"
+"rs39197765","13","238213064","TT"
+"rs6032582","3","116505877","AC"
+"rs43164119","15","157285565","GT"
+"rs54404922","13","234020555","GT"
+"rs58783637","18","74838084","AC"
+"rs71490681","16","235017932","TT"
+"rs82996233","4","132624704","AA"
+"rs46909953","5","131355032","AC"
+`;
+
+// Allowlist: the only places in your DNA this page ever looks at.
+const GREEN = {
+  rs4988235: { name: "Milk (lactose)", read: g => g === "GG"
+      ? ["You are likely lactose intolerant.", "I am lactose intolerant."]
+      : ["You likely digest milk well as an adult.", "I am lactose tolerant."] },
+  rs762551: { name: "Coffee (caffeine)", read: g => g === "AA"
+      ? ["You likely break down caffeine fast.", "I am a fast caffeine metaboliser."]
+      : ["You likely break down caffeine slowly, so late coffee may keep you awake.", "I am a slow caffeine metaboliser."] },
+  rs1815739: { name: "Muscles (ACTN3)", read: g => g === "CC"
+      ? ["Your muscles lean towards power and sprinting.", "My muscle type is power."]
+      : g === "TT" ? ["Your muscles lean towards endurance.", "My muscle type is endurance."]
+      : ["Your muscles are a mix of power and endurance.", "My muscle type is mixed."] },
+  rs72921001: { name: "Coriander taste", read: g => g === "AA"
+      ? ["Coriander may taste like soap to you.", "Coriander tastes like soap to me."]
+      : g === "AC" ? ["Coriander might taste a bit soapy to you.", "Coriander tastes a bit soapy to me."]
+      : ["Coriander likely tastes normal to you.", "I like coriander."] },
+};
+const RED = {
+  rs7903146: { name: "Type 2 diabetes (TCF7L2)", read: g => g === "TT"
+      ? "Two copies of a variant linked to a somewhat higher risk."
+      : g.includes("T") ? "One copy of a variant linked to a slightly higher risk."
+      : "No copy of this variant." },
+};
+
+function parse(text) {
+  const out = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || /^"?rsid/i.test(line)) continue;
+    const parts = line.split(/[\t,]/).map(p => p.replace(/"/g, "").trim());
+    if (parts.length < 4) continue;
+    const id = parts[0];
+    if (GREEN[id] || RED[id]) out[id] = parts.slice(3).join("").toUpperCase();
+  }
+  return out;
+}
+
+function show(text) {
+  const found = parse(text);
+  const green = document.getElementById("green");
+  green.innerHTML = "";
+  let n = 0;
+  for (const id in GREEN) {
+    if (!found[id] || found[id].includes("-")) continue;
+    const [meaning, sentence] = GREEN[id].read(found[id]);
+    const card = document.createElement("div");
+    card.className = "card green";
+    card.innerHTML = `<b>${GREEN[id].name}</b><br>${meaning}<div class="say">Tell Pippa: "${sentence}"</div>`;
+    const b = document.createElement("button");
+    b.textContent = "Copy sentence";
+    b.onclick = () => { navigator.clipboard.writeText(sentence); b.textContent = "Copied ✓"; };
+    card.appendChild(b);
+    green.appendChild(card);
+    n++;
+  }
+  if (!n) green.innerHTML = '<div class="card">I could not find the everyday traits in this file. Is it the raw data file?</div>';
+  window._found = found;
+  document.getElementById("start").classList.add("hidden");
+  document.getElementById("results").classList.remove("hidden");
+}
+
+document.getElementById("optin").onchange = e => {
+  const box = document.getElementById("red-box");
+  box.innerHTML = "";
+  if (!e.target.checked) { box.style.display = "none"; return; }
+  for (const id in RED) {
+    const g = (window._found || {})[id];
+    if (!g) continue;
+    const card = document.createElement("div");
+    card.className = "card red";
+    card.innerHTML = `<b>${RED[id].name}</b><br>${RED[id].read(g)}<br><span class="muted">This is not a diagnosis. Single genes say little about real risk; lifestyle matters far more. Talk to a doctor if you are worried. This result is not shared anywhere.</span>`;
+    box.appendChild(card);
+  }
+  box.style.display = "block";
+};
+
+const drop = document.getElementById("drop"), file = document.getElementById("file");
+drop.onclick = () => file.click();
+file.onchange = () => file.files[0] && file.files[0].text().then(show);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0].text().then(show); };
+document.getElementById("example").onclick = () => show(SAMPLE);
+document.getElementById("forget").onclick = () => { window._found = null; location.reload(); };
+</script>
+</body>
+</html>

@@ -1,40 +1,20 @@
-"""Your app. Replace this with whatever you are building.
+"""Gene Day: daily answers from a plain DNA trait the user states.
 
-The shape never changes, whatever your app does:
+Privacy design, enforced by the shape of this app:
 
-    class App:
-        manifest  -> the parsed manifest.yaml sitting next to this file
-        handle(call) -> Result
-
-`handle` is called once per request and must return a `Result` whose `data`
-matches the `output` your manifest declares for that outcome — exactly: every
-declared field present, nothing extra, right types. The runtime checks it and
-refuses anything that does not match, which is deliberate. An app that can
-return surprise fields is an app Pippa cannot describe to a user before they
-install it.
-
-Three things worth knowing before you start:
-
-**You get the inputs, and nothing about who asked.** No user id, no account,
-no conversation. `call.inputs` is what Pippa extracted from the message;
-besides it, `call.context` carries only the time, an id for your logs, and
-whether the person picked your app by name. This is on purpose: your app
-cannot leak what it was never given.
-
-**You keep nothing.** A fresh copy of this class is built for every call and
-thrown away afterwards. Writing to a file or a global will appear to work and
-then silently stop, because the next call may be on a different machine.
-
-**Errors are part of the design.** Raise `AgentAppError` with a `user_message`
-when you cannot answer. That message is the one a user may see; everything
-else — the exception type, the traceback — stays in the logs.
+* The raw DNA file never reaches this app. It is read offline, on the
+  user's own computer, with `local_reader/dna-reader.html`.
+* This app only accepts plain trait words ("slow", "intolerant"). Anything
+  that looks like a genotype or an rs number is refused, not used.
+* Health risk results (the red tier) have no input here at all.
+* Pippa runs every app with `persistence: none`, and the app is told nothing
+  about who is asking, so it cannot keep or link anything.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+import re
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from pippa_agentapp_sdk import (
     AgentAppError,
@@ -47,21 +27,91 @@ from pippa_agentapp_sdk import (
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.yaml")
 
+# Hours before bed to stop caffeine. A rough rule of thumb from caffeine's
+# half life (about 5 hours on average, longer for slow CYP1A2 metabolisers).
+CUTOFF_HOURS = {"fast": 6, "normal": 8, "slow": 10}
+DEFAULT_BEDTIME = "23:00"
 
-class CannotReadDate(AgentAppError):
-    """Raised when the message did not contain a date we can work with."""
+# Approximate grams of lactose per typical serving.
+LACTOSE = {
+    "milkshake": (20.0, "a 350 ml milkshake"),
+    "hot chocolate": (13.0, "a mug made with milk"),
+    "milk": (12.0, "a 250 ml glass"),
+    "latte": (14.0, "a large latte"),
+    "cappuccino": (7.0, "a regular cappuccino"),
+    "flat white": (6.0, "a flat white"),
+    "mac and cheese": (6.0, "a bowl"),
+    "custard": (7.0, "a 150 g bowl"),
+    "ice cream": (6.0, "two scoops, about 100 g"),
+    "greek yogurt": (4.0, "a 150 g pot"),
+    "yogurt": (6.0, "a 150 g pot"),
+    "yoghurt": (6.0, "a 150 g pot"),
+    "kefir": (3.0, "a 250 ml glass"),
+    "cheesecake": (4.0, "a slice"),
+    "cottage cheese": (3.0, "100 g"),
+    "milk chocolate": (3.0, "a 40 g bar"),
+    "cream": (1.0, "a 30 ml splash"),
+    "pizza": (1.0, "a few slices"),
+    "mozzarella": (0.3, "30 g"),
+    "brie": (0.1, "30 g"),
+    "butter": (0.1, "10 g on bread"),
+    "cheddar": (0.1, "30 g"),
+    "parmesan": (0.0, "a grated topping"),
+    "cheese": (0.1, "30 g of hard cheese"),
+    "oat milk": (0.0, "a 250 ml glass"),
+    "soy milk": (0.0, "a 250 ml glass"),
+    "almond milk": (0.0, "a 250 ml glass"),
+    "lactose free milk": (0.0, "a 250 ml glass"),
+}
+# Longest names first, so "oat milk" wins over "milk".
+FOODS = sorted(LACTOSE, key=len, reverse=True)
 
-    # What a user may be shown. Write it as a sentence, not an error code.
-    user_message = "I could not work out which date you meant."
+# Many lactose intolerant adults cope with about 12 g in one sitting.
+USUALLY_OK_GRAMS = 12.0
+FINE_GRAMS = 2.0
+
+GENOTYPE = re.compile(r"\b[rR][sS]\d+|\b[ACGT]{2}\b|\b[ACGT]/[ACGT]\b")
+
+
+class RawDnaRefused(AgentAppError):
+    user_message = (
+        "I only work with plain trait words like slow, fast, tolerant or "
+        "intolerant. Please never send DNA letters or rs numbers to an app."
+    )
     retryable = False
 
 
-class App:
-    """A small, complete example: count the days until a date."""
+class MetabolismUnknown(AgentAppError):
+    user_message = (
+        "Tell me if you are a slow, normal or fast caffeine metaboliser, for "
+        "example: I am a slow caffeine metaboliser, when is my last coffee?"
+    )
+    retryable = False
 
+
+class BedtimeUnreadable(AgentAppError):
+    user_message = "I could not read your bedtime. Try a time like 23:00."
+    retryable = False
+
+
+class FoodMissing(AgentAppError):
+    user_message = "Tell me which food or drink, for example: how much lactose is in a latte?"
+    retryable = False
+
+
+class FoodUnknown(AgentAppError):
+    user_message = "I do not have a lactose figure for that food yet."
+    retryable = False
+
+
+def _refuse_raw_dna(*values: str) -> None:
+    for value in values:
+        if value and GENOTYPE.search(value):
+            raise RawDnaRefused("input looked like a genotype or rs number")
+
+
+class App:
     def __init__(self) -> None:
-        # Validated at construction, so an app whose manifest is wrong fails
-        # immediately and loudly rather than on some later call.
         self._manifest = validate_manifest(load_manifest_file(MANIFEST_PATH))
 
     @property
@@ -69,110 +119,125 @@ class App:
         return self._manifest
 
     def handle(self, call: Call) -> Result:
-        """One request in, one Result out.
+        if call.outcome_id == "caffeine.cutoff":
+            return self._caffeine(call)
+        if call.outcome_id == "lactose.check":
+            return self._lactose(call)
+        raise AgentAppError(f"this app cannot do {call.outcome_id!r}")
 
-        `call.outcome_id` says which of your manifest's outcomes was asked
-        for. With one outcome you can ignore it; with several, branch on it.
-        """
-        if call.outcome_id != "days.until":
-            raise AgentAppError(f"this app cannot do {call.outcome_id!r}")
+    # caffeine
+    def _caffeine(self, call: Call) -> Result:
+        speed_text = (call.inputs.get("caffeine_metabolism") or "").strip()
+        bed_text = (call.inputs.get("bedtime") or "").strip()
+        _refuse_raw_dna(speed_text)
 
-        text = (call.inputs.get("date") or "").strip()
-        if not text:
-            # The manifest tells the extractor to send an empty string rather
-            # than guess, so this is the ordinary "they did not say" path.
-            #
-            # A missing or unreadable date (here, and in `_parse` below) is
-            # the only thing this app refuses for, which is why it never reads
-            # `call.context.explicit`, True when the person picked the app
-            # with @. That refusal is right whoever chose the app; the test
-            # that says so is in test_app.py.
-            raise CannotReadDate("no date in the message")
+        speed = self._speed(speed_text)
+        bed_minutes = self._clock(bed_text or DEFAULT_BEDTIME)
+        hours = CUTOFF_HOURS[speed]
+        cutoff = (bed_minutes - hours * 60) % (24 * 60)
 
-        # `call.context.now` is the current time, supplied by the runtime
-        # rather than read from the clock. That is what makes an app testable:
-        # a test can say what "now" is.
-        today = self._today(call)
-        target = self._parse(text, today)
-        difference = (target - today).days
-
+        bed = self._fmt(bed_minutes)
+        last = self._fmt(cutoff)
+        sentence = (
+            f"As a {speed} caffeine metaboliser going to bed at {bed}, "
+            f"have your last coffee at {last}, {hours} hours before sleep."
+        )
+        if not bed_text:
+            sentence += " I assumed a bedtime of 23:00."
         return Result(
             data={
-                "days": abs(difference),
-                "target_date": target.isoformat(),
-                "weekday": target.strftime("%A"),
-                "already_passed": difference < 0,
+                "last_coffee_time": last,
+                "hours_before_bed": hours,
+                "metabolism_used": speed,
+                "bedtime_used": bed,
             },
-            # Optional. One plain sentence Pippa may use when it writes its
-            # reply. Say what you found, not what you did.
-            narrative=self._sentence(target, difference),
+            narrative=sentence,
         )
 
     @staticmethod
-    def _today(call: Call) -> date:
-        """The user's today, not the server's.
-
-        A server in UTC and a user in Auckland disagree about what day it is
-        for twelve hours out of every twenty-four, and "how many days until"
-        is exactly the question that notices.
-        """
-        # No try/except around ZoneInfo, and that is the point: the manifest
-        # declares this input as `type: timezone`, so the runtime has already
-        # rejected anything that is not a real IANA zone before your code
-        # runs. Declaring the right type is cheaper than validating by hand,
-        # and the user gets a better error.
-        zone = call.inputs.get("timezone")
-        moment: datetime = call.context.now
-        if zone:
-            moment = moment.astimezone(ZoneInfo(zone))
-        return moment.date()
+    def _speed(text: str) -> str:
+        t = text.lower()
+        if "slow" in t:
+            return "slow"
+        if "fast" in t or "rapid" in t:
+            return "fast"
+        if "normal" in t or "average" in t or "medium" in t:
+            return "normal"
+        raise MetabolismUnknown(f"no metabolism speed in {text!r}")
 
     @staticmethod
-    def _parse(text: str, today: date) -> date:
-        """Turn what the user wrote into a date.
-
-        Deliberately small — real date parsing is its own project. Handles
-        `YYYY-MM-DD`, `25 December`, `December 25` and a bare day number.
-        """
-        cleaned = text.replace(",", " ").strip()
-
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(cleaned, fmt).date()
-            except ValueError:
-                continue
-
-        for fmt in ("%d %B", "%B %d", "%d %b", "%b %d"):
-            try:
-                parsed = datetime.strptime(cleaned, fmt).date()
-            except ValueError:
-                continue
-            # A bare day and month has no year. "25 December" asked in
-            # February means this year; asked in December means this year too,
-            # until it has passed, and then it means next year.
-            candidate = parsed.replace(year=today.year)
-            if candidate < today:
-                candidate = candidate.replace(year=today.year + 1)
-            return candidate
-
-        if cleaned.lower() == "tomorrow":
-            return today + timedelta(days=1)
-
-        raise CannotReadDate(f"could not parse {text!r} as a date")
+    def _clock(text: str) -> int:
+        t = text.lower().replace(".", ":").replace(" ", "")
+        match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?(am|pm)?", t)
+        if not match:
+            raise BedtimeUnreadable(f"could not read {text!r}")
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        suffix = match.group(3)
+        if suffix == "pm" and hour < 12:
+            hour += 12
+        if suffix == "am" and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59:
+            raise BedtimeUnreadable(f"out of range {text!r}")
+        return hour * 60 + minute
 
     @staticmethod
-    def _sentence(target: date, difference: int) -> str:
-        # Built by hand rather than with `%-d`, which is a GNU extension: it
-        # raises ValueError on Windows, where half of you are developing, and
-        # the failure would only show up at the last line of a working app.
-        pretty = (
-            f"{target.strftime('%A')} {target.day} "
-            f"{target.strftime('%B')} {target.year}"
+    def _fmt(minutes: int) -> str:
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+    # lactose
+    def _lactose(self, call: Call) -> Result:
+        food_text = (call.inputs.get("food") or "").strip()
+        status_raw = (call.inputs.get("lactose_status") or "").strip()
+        _refuse_raw_dna(status_raw)
+        status_text = status_raw.lower()
+        if not food_text:
+            raise FoodMissing("no food in the message")
+
+        food = self._match_food(food_text)
+        grams, serving = LACTOSE[food]
+        tolerant = "intolerant" not in status_text and "tolerant" in status_text
+
+        if tolerant or grams <= FINE_GRAMS:
+            verdict, ok = "fine", True
+        elif grams <= USUALLY_OK_GRAMS:
+            verdict, ok = "usually ok", True
+        else:
+            verdict, ok = "likely symptoms", False
+
+        sentence = f"{food[0].upper()}{food[1:]} ({serving}) has about {grams:g} g of lactose."
+        if tolerant:
+            sentence += " You digest lactose well, so that is no problem."
+        elif verdict == "fine":
+            sentence += " That is so little that it is fine even if you are lactose intolerant."
+        elif verdict == "usually ok":
+            sentence += (
+                " Most lactose intolerant people cope with up to about 12 g in one"
+                " sitting, so one serving is usually ok."
+            )
+        else:
+            sentence += (
+                " That is above the roughly 12 g most lactose intolerant people"
+                " cope with, so pick a lactose free version or take lactase."
+            )
+        return Result(
+            data={
+                "food_matched": food,
+                "serving": serving,
+                "lactose_grams": round(grams, 1),
+                "verdict": verdict,
+                "likely_ok": ok,
+            },
+            narrative=sentence,
         )
-        if difference == 0:
-            return f"That is today, {pretty}."
-        if difference < 0:
-            return f"{pretty} was {abs(difference)} days ago."
-        if difference == 1:
-            return f"{pretty} is tomorrow."
-        return f"There are {difference} days until {pretty}."
+
+    @staticmethod
+    def _match_food(text: str) -> str:
+        t = text.lower().replace("-", " ")
+        for food in FOODS:
+            if food in t:
+                return food
+        error = FoodUnknown(f"no lactose entry for {text!r}")
+        error.user_message = f"I do not have a lactose figure for {text} yet."
+        raise error
