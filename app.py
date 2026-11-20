@@ -1,4 +1,4 @@
-"""Gene Day: daily answers from a plain DNA trait the user states.
+"""Gene Day: daily answers from a plain DNA trait the user states (v0.1.0).
 
 Privacy design, enforced by the shape of this app:
 
