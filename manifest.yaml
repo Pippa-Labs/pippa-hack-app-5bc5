@@ -44,12 +44,13 @@ app_author_name: "Mau2k3"
 app:
   id: hack.app_5bc5
   name: Gene Day
-  version: 0.1.0
+  version: 0.1.1
   summary: >-
-    Works out your latest coffee time and the lactose in a food, from a plain
-    DNA trait you state such as slow caffeine metaboliser or lactose
-    intolerant. Never receives raw DNA, genotypes or health risks, and keeps
-    nothing.
+    Answers your question about the part of your genome you choose, such as
+    the caffeine gene or the lactase gene, and turns it into a daily answer
+    like your latest coffee time or the lactose in a food. Your genome is read
+    offline on your own computer with the Gene Day reader, so this app never
+    receives raw DNA, genotypes or health risks, and keeps nothing.
 
 agent_types:
   - personal
